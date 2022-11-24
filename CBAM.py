@@ -34,7 +34,7 @@ parser.add_argument('--data_folder', type=str, help='Specify the path to the fol
 parser.add_argument('--with_cbam', help='Use this flag in order to make use of CBAM.', action='store_true')
 parser.add_argument('--epoch', type=int, help='Specify the number of epochs for the training.', default=50)
 parser.add_argument('--batch_size', type=int, help='Specify the batch size to be used during training/testing.', default=10)
-parser.add_argument('--num_classes', type=int, help='Specify the number of classes the dataset has.', default=3)
+parser.add_argument('--num_classes', type=int, help='Specify the number of classes the dataset has.', default=10)
 parser.add_argument('--learning_rate', type=float, help='Specify the learning rate to be used during training.', default=1e-4)
 parser.add_argument('--decay_rate', type=float, help='Specify the decay rate to apply to the learning rate to be used during training.', default=0.98)
 
@@ -364,7 +364,7 @@ def train(gpu, args):
 
             total_loss.backward()
             optimizer.step()
-            btch_accr = accuracy(predicted=net_output, target=y)
+            btch_accr = accuracy(pred=net_output, target=y)
             epch_loss.append(total_loss.item())
             epch_accr.append(btch_accr)
 
@@ -393,7 +393,7 @@ def train(gpu, args):
 
                 total_loss = criterion(input=net_output, target=y)
 
-                btch_accr = accuracy(predicted=net_output, target=y)
+                btch_accr = accuracy(pred=net_output, target=y)
                 epch_loss.append(total_loss.item())
                 epch_accr.append(btch_accr)
 
@@ -423,7 +423,7 @@ def train(gpu, args):
 
 
 os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '8001'
+os.environ['MASTER_PORT'] = '8002'
 
 if __name__ == '__main__':
     mp.spawn(train, nprocs=1, args=(args,))
