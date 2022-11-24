@@ -31,7 +31,7 @@ parser = argparse.ArgumentParser()
 # Except the data_folder every other parameter has default value, made in this way to easily toggle with
 # hyperparameters so that the best set of hyperparameters can be chosen
 parser.add_argument('--data_folder', type=str, help='Specify the path to the folder where the data is.', required=True)
-parser.add_argument('--use_cbam', help='Use this flag in order to make use of CBAM.', action='store_true')
+parser.add_argument('--with_cbam', help='Use this flag in order to make use of CBAM.', action='store_true')
 parser.add_argument('--epoch', type=int, help='Specify the number of epochs for the training.', default=50)
 parser.add_argument('--batch_size', type=int, help='Specify the batch size to be used during training/testing.', default=10)
 parser.add_argument('--num_classes', type=int, help='Specify the number of classes the dataset has.', default=3)
@@ -48,15 +48,15 @@ class MyDataLoader(Dataset):
         self.image_size = image_size
         self.image_depth = image_depth
         self.train = train
-        self.classes = sorted(self.get_classnames())
-        self.image_path_label = self.read_folder()
+        self.classes = sorted(self.classesList())
+        self.image_path_label = self.data_from_folder()
 
 
-    def get_classnames(self):
+    def classesList(self):
         return os.listdir(f"{self.dataset_folder_path.rstrip('/')}/train/" )
 
 
-    def read_folder(self):
+    def data_from_folder(self):
         image_path_label = []
 
         if self.train:
@@ -177,12 +177,12 @@ class CBAM(nn.Module):
 
 # Would use the above made block in RESNET model, So creating the already existing RESNET first
 class BottleNeck(nn.Module):
-    def __init__(self, in_channels, out_channels, expansion=4, stride=1, use_cbam=True):
+    def __init__(self, in_channels, out_channels, expansion=4, stride=1, with_cbam=True):
         super(BottleNeck, self).__init__()
 
         # Parameter to know whether to use CBAM or not
-        self.use_cbam = use_cbam
-        #only the first conv will be affected by the given stride parameter. The rest have default stride value (which is 1).
+        self.with_cbam = with_cbam
+
         self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1, bias=False, stride=stride)
         self.bn1 = nn.BatchNorm2d(num_features=out_channels)
         self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1, bias=False)
@@ -191,8 +191,6 @@ class BottleNeck(nn.Module):
         self.bn3 = nn.BatchNorm2d(num_features=out_channels*expansion)
         self.relu = nn.ReLU(inplace=True)
 
-        #since the input has to be same size with the output during the identity mapping, whenever the stride or the number of output channels are
-        #more than 1 and expansion*out_channels respectively, the input, x, has to be downsampled to the same level as well.
         self.identity_connection = nn.Sequential()
         if stride != 1 or in_channels != expansion*out_channels:
             self.identity_connection = nn.Sequential(
@@ -200,7 +198,7 @@ class BottleNeck(nn.Module):
                 nn.BatchNorm2d(num_features=out_channels*expansion)
             )
 
-        if self.use_cbam:
+        if self.with_cbam:
             self.cbam = CBAM(channel_in=out_channels*expansion)
 
 
@@ -209,7 +207,7 @@ class BottleNeck(nn.Module):
         out = self.relu(self.bn2(self.conv2(out)))
         out = self.bn3(self.conv3(out))
 
-        if self.use_cbam:
+        if self.with_cbam:
             out = self.cbam(out)
 
         out += self.identity_connection(x) #identity connection/skip connection
@@ -219,7 +217,7 @@ class BottleNeck(nn.Module):
 
 
 class ResNet50(nn.Module):
-    def __init__(self, use_cbam=True, image_depth=3, num_classes=6):
+    def __init__(self, with_cbam=True, image_depth=3, num_classes=6):
         super(ResNet50, self).__init__()
 
         self.in_channels = 64
@@ -231,19 +229,19 @@ class ResNet50(nn.Module):
                                             nn.ReLU(inplace=True),
                                             nn.MaxPool2d(stride=2, kernel_size=3, padding=1))
 
-        self.layer1 = self.make_layer(out_channels=64, num_blocks=self.num_blocks[0], stride=1, use_cbam=use_cbam)
-        self.layer2 = self.make_layer(out_channels=128, num_blocks=self.num_blocks[1], stride=2, use_cbam=use_cbam)
-        self.layer3 = self.make_layer(out_channels=256, num_blocks=self.num_blocks[2], stride=2, use_cbam=use_cbam)
-        self.layer4 = self.make_layer(out_channels=512, num_blocks=self.num_blocks[3], stride=2, use_cbam=use_cbam)
+        self.layer1 = self.new_layer(out_channels=64, num_blocks=self.num_blocks[0], stride=1, with_cbam=with_cbam)
+        self.layer2 = self.new_layer(out_channels=128, num_blocks=self.num_blocks[1], stride=2, with_cbam=with_cbam)
+        self.layer3 = self.new_layer(out_channels=256, num_blocks=self.num_blocks[2], stride=2, with_cbam=with_cbam)
+        self.layer4 = self.new_layer(out_channels=512, num_blocks=self.num_blocks[3], stride=2, with_cbam=with_cbam)
         self.avgpool = nn.AvgPool2d(7)
         self.linear = nn.Linear(512*self.expansion, num_classes)
 
 
-    def make_layer(self, out_channels, num_blocks, stride, use_cbam):
-        strides = [stride] + [1]*(num_blocks-1)
+    def new_layer(self, out_channels, num_blocks, stride, with_cbam):
         layers = []
+        strides = [stride] + [1]*(num_blocks-1)
         for stride in strides:
-            layers.append(BottleNeck(in_channels=self.in_channels, out_channels=out_channels, stride=stride, expansion=self.expansion, use_cbam=use_cbam))
+            layers.append(BottleNeck(in_channels=self.in_channels, out_channels=out_channels, stride=stride, expansion=self.expansion, with_cbam=with_cbam))
             self.in_channels = out_channels * self.expansion
         return nn.Sequential(*layers)
 
@@ -264,15 +262,15 @@ class ResNet50(nn.Module):
 fig=plt.figure(figsize=(20, 5))
 
 # Function to plot lines after every epoch for training accuracy and loss
-def plot_loss_acc(path, num_epoch, train_accuracies, train_losses, test_accuracies, test_losses):
+def loss_acc_graph(path, num_epoch, train_accuracies, train_losses, test_accuracies, test_losses):
     plt.clf()
 
     epochs = [x for x in range(num_epoch+1)]
 
-    train_accuracy_df = pd.DataFrame({"Epochs":epochs, "Accuracy":train_accuracies, "Mode":['train']*(num_epoch+1)})
-    test_accuracy_df = pd.DataFrame({"Epochs":epochs, "Accuracy":test_accuracies, "Mode":['test']*(num_epoch+1)})
+    accr_train = pd.DataFrame({"Epochs":epochs, "Accuracy":train_accuracies, "Mode":['train']*(num_epoch+1)})
+    accr_test = pd.DataFrame({"Epochs":epochs, "Accuracy":test_accuracies, "Mode":['test']*(num_epoch+1)})
 
-    data = pd.concat([train_accuracy_df, test_accuracy_df])
+    data = pd.concat([accr_train, accr_test])
 
     sns.lineplot(data=data, x='Epochs', y='Accuracy', hue='Mode')
     plt.title('Accuracy Graph')
@@ -280,10 +278,10 @@ def plot_loss_acc(path, num_epoch, train_accuracies, train_losses, test_accuraci
 
     plt.clf()
 
-    train_loss_df = pd.DataFrame({"Epochs":epochs, "Loss":train_losses, "Mode":['train']*(num_epoch+1)})
-    test_loss_df = pd.DataFrame({"Epochs":epochs, "Loss":test_losses, "Mode":['test']*(num_epoch+1)})
+    loss_train = pd.DataFrame({"Epochs":epochs, "Loss":train_losses, "Mode":['train']*(num_epoch+1)})
+    loss_test = pd.DataFrame({"Epochs":epochs, "Loss":test_losses, "Mode":['test']*(num_epoch+1)})
 
-    data = pd.concat([train_loss_df, test_loss_df])
+    data = pd.concat([loss_train, loss_test])
 
     sns.lineplot(data=data, x='Epochs', y='Loss', hue='Mode')
     plt.title('Loss Graph')
@@ -293,29 +291,26 @@ def plot_loss_acc(path, num_epoch, train_accuracies, train_losses, test_accuraci
     return None
 
 # Creating the function to calculate the accuracy of the model
-def calculate_accuracy(predicted, target):
+def accuracy(pred, target):
     num_data = target.size()[0]
-    predicted = torch.argmax(predicted, dim=1)
-    correct_pred = torch.sum(predicted == target)
+    pred = torch.argmax(pred, dim=1)
+    correct_pred = torch.sum(pred == target)
 
-    accuracy = correct_pred*(100/num_data)
+    accr = correct_pred*(100/num_data)
 
-    return accuracy.item()
+    return accr.item()
 
 # Making folders to save the checkpoint
-if not os.path.exists('./graphs/') : os.mkdir('./graphs/')
-model_save_folder = 'resnet_cbam/' if args.use_cbam else 'resnet/'
+if not os.path.exists('./PLOTS/') : os.mkdir('./PLOTS/')
+model_save_folder = 'RESENT_WITH_CBAM/' if args.with_cbam else 'RESNET_WITHOUT_CBAM/'
 
 if not os.path.exists(model_save_folder) : os.mkdir(model_save_folder)
 
 # Lets create the final forward and backward propagation train function
 def train(gpu, args):
-    world_size = 1
+    dist.init_process_group(backend='nccl', init_method='env://', world_size=1, rank=gpu)
 
-
-    dist.init_process_group(backend='nccl', init_method='env://', world_size=world_size, rank=gpu)
-
-    model = ResNet50(image_depth=3, num_classes=args.num_classes, use_cbam=args.use_cbam)
+    model = ResNet50(image_depth=3, num_classes=args.num_classes, with_cbam=args.with_cbam)
     torch.cuda.set_device(gpu)
     model.cuda(gpu)
 
@@ -330,107 +325,98 @@ def train(gpu, args):
 
     model = nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
 
-    train_dataset = MyDataLoader(dataset_folder_path=args.data_folder, image_size=224, image_depth=3, train=True,
+    data_train = MyDataLoader(dataset_folder_path=args.data_folder, image_size=224, image_depth=3, train=True,
                             transform=transforms.ToTensor())
-    test_dataset = MyDataLoader(dataset_folder_path=args.data_folder, image_size=224, image_depth=3, train=False,
+    data_test = MyDataLoader(dataset_folder_path=args.data_folder, image_size=224, image_depth=3, train=False,
                                 transform=transforms.ToTensor())
 
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, num_replicas=world_size, rank=gpu)
+    sample_train = torch.utils.data.distributed.DistributedSampler(data_train, num_replicas=1, rank=gpu)
 
-    train_generator = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False,
-                                    num_workers=4, pin_memory=True, sampler=train_sampler)
-    test_generator = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4,
+    train_batches = DataLoader(data_train, batch_size=args.batch_size, shuffle=False,
+                                    num_workers=4, pin_memory=True, sampler=sample_train)
+    test_batches = DataLoader(data_test, batch_size=args.batch_size, shuffle=False, num_workers=4,
                                     pin_memory=True)
 
 
-    training_loss_list = []
-    training_acc_list = []
-    testing_loss_list = []
-    testing_acc_list = []
+    train_loss = []
+    train_acc = []
+    test_loss = []
+    test_acc = []
 
     # This best accuracy whenevrer topped would result in storage of the model parameter in that epoch
-    best_accuracy = 0
-    for epoch_idx in range(args.epoch):
+    best = 0
+    for idx in range(args.epoch):
         #Model Training & Validation.
         model.train()
 
         # Epoch loss and accuracy to use in plotting the graph for training
-        epoch_loss = []
-        epoch_accuracy = []
+        epch_loss = []
+        epch_accr = []
         i = 0
 
-        for i, sample in tqdm(enumerate(train_generator)):
-
-            batch_x, batch_y = sample['image'].cuda(non_blocking=True), sample['label'].cuda(non_blocking=True)
+        for i, sample in tqdm(enumerate(train_batches)):
+            x, y = sample['image'].cuda(non_blocking=True), sample['label'].cuda(non_blocking=True)
 
             optimizer.zero_grad()
 
-            _,net_output = model(batch_x)
-            total_loss = criterion(input=net_output, target=batch_y)
+            _,net_output = model(x)
+            total_loss = criterion(input=net_output, target=y)
 
             total_loss.backward()
             optimizer.step()
-            batch_accuracy = calculate_accuracy(predicted=net_output, target=batch_y)
-            epoch_loss.append(total_loss.item())
-            epoch_accuracy.append(batch_accuracy)
+            btch_accr = accuracy(predicted=net_output, target=y)
+            epch_loss.append(total_loss.item())
+            epch_accr.append(btch_accr)
 
-        curr_accuracy = sum(epoch_accuracy)/(i+1)
-        curr_loss = sum(epoch_loss)/(i+1)
+        cum_accr = sum(epch_accr)/(i+1)
+        cum_loss = sum(epch_loss)/(i+1)
 
-        training_loss_list.append(curr_loss)
-        training_acc_list.append(curr_accuracy)
+        train_loss.append(cum_loss)
+        train_acc.append(cum_accr)
 
-        print(f"Epoch {epoch_idx}")
-        print(f"Training Loss : {curr_loss}, Training accuracy : {curr_accuracy}")
+        print(f"Epoch {idx}")
+        print(f"Training Loss : {cum_loss}, Training accuracy : {cum_accr}")
 
         model.eval()
 
         # Epoch loss and accuracy to use in plotting the graph for training
-        epoch_loss = []
-        epoch_accuracy = []
+        epch_loss = []
+        epch_accr = []
         i = 0
 
         with torch.set_grad_enabled(False):
-            for i, sample in tqdm(enumerate(test_generator)):
+            for i, sample in tqdm(enumerate(test_batches)):
 
-                batch_x, batch_y = sample['image'].cuda(non_blocking=True), sample['label'].cuda(non_blocking=True)
+                x, y = sample['image'].cuda(non_blocking=True), sample['label'].cuda(non_blocking=True)
 
-                _,net_output = model(batch_x)
+                _,net_output = model(x)
 
-                total_loss = criterion(input=net_output, target=batch_y)
+                total_loss = criterion(input=net_output, target=y)
 
-                batch_accuracy = calculate_accuracy(predicted=net_output, target=batch_y)
-                epoch_loss.append(total_loss.item())
-                epoch_accuracy.append(batch_accuracy)
+                btch_accr = accuracy(predicted=net_output, target=y)
+                epch_loss.append(total_loss.item())
+                epch_accr.append(btch_accr)
 
-            curr_accuracy = sum(epoch_accuracy)/(i+1)
-            curr_loss = sum(epoch_loss)/(i+1)
+            cum_accr = sum(epch_accr)/(i+1)
+            cum_loss = sum(epch_loss)/(i+1)
 
-            testing_loss_list.append(curr_loss)
-            testing_acc_list.append(curr_accuracy)
+            test_loss.append(cum_loss)
+            test_acc.append(cum_accr)
 
-        print(f"Testing Loss : {curr_loss}, Testing accuracy : {curr_accuracy}")
+        print(f"Testing Loss : {cum_loss}, Testing accuracy : {cum_accr}")
 
         #plot accuracy and loss graph
-        plot_loss_acc(path='./graphs/', num_epoch=epoch_idx, train_accuracies=training_acc_list, train_losses=training_loss_list,
-                            test_accuracies=testing_acc_list, test_losses=testing_loss_list)
+        loss_acc_graph(path='./PLOTS/', num_epoch=idx, train_accuracies=train_acc, train_losses=train_loss,
+                            test_accuracies=test_acc, test_losses=test_loss)
 
-        if epoch_idx % 5 == 0:
+        if idx % 5 == 0:
             #decrease the learning rate at every n epoch.
             lr_decay.step()
-            curr_lr = 0
-            for params in optimizer.param_groups:
-                curr_lr = params['lr']
-            print(f"The current learning rate for training is : {curr_lr}")
-
 
         # Storing the model if accuracy improves than the best
-        if best_accuracy < curr_accuracy:
+        if best < cum_accr:
             torch.save(model.state_dict(), f"{model_save_folder}model.pth")
-            best_accuracy = curr_accuracy
-            print('Model is saved!')
-
-
+            best = cum_accr
         print('\n--------------------------------------------------------------------------------\n')
 
     print("Loss and Accuracy plots stored in the graphs folder")
